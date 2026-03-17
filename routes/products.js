@@ -640,7 +640,7 @@ router.delete(
 // ============================================================
 
 // POST /products/:id/view - Record a product view (authenticated users)
-router.post("/products/:id/view", authenticateToken, async (req, res) => {
+router.post("/view/:id", authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
