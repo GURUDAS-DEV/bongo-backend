@@ -5,6 +5,7 @@ const pool = require("../db");
 const { v4: uuidv4 } = require("uuid");
 const { PutObjectCommand } = require("@aws-sdk/client-s3");
 const { upload, s3Client } = require("../helpers/uploadImage");
+const sendMail = require("../helpers/sendMail");
 
 const router = express.Router();
 
@@ -495,11 +496,11 @@ router.put(
         (async () => {
           try {
             for (const user of users) {
-              await sendEmail(
-                user.email,
-                `🔥 ${user.name} is back in stock!`,
-                `Good news! The product "${user.name}" is available again. Grab it before it's gone!`
-              );
+              await sendMail({
+                to: user.email,
+                subject: `🔥 ${user.name} is back in stock!`,
+                text: `Good news! The product "${user.name}" is available again. Grab it before it's gone!`
+              });
             }
 
             // mark as notified
