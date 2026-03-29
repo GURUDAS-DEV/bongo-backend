@@ -19,7 +19,7 @@ const adminRouter = require("./routes/admin");
 const blogsRouter = require("./routes/blogs");
 const extras = require("./routes/extras");
 
-app.use("/auth", authRouter);
+app.use("/api/auth", authRouter);
 app.use("/profile", profileRouter);
 app.use("/products", productsRouter);
 app.use("/store", ordersRouter);

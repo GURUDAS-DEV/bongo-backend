@@ -4,47 +4,7 @@ const pool = require("../db");
 
 const router = express.Router();
 
-// GET /profile - Get current user profile
-router.get("/", authenticateToken, async (req, res) => {
-  try {
-    const user = await pool.query(
-      "SELECT id, full_name, email, phone, role, created_at FROM users WHERE id = $1",
-      [req.user.id],
-    );
 
-    if (user.rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    res.json(user.rows[0]);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// PUT /profile - Edit profile
-router.put("/", authenticateToken, async (req, res) => {
-  const { full_name, phone } = req.body;
-
-  if (!full_name || !phone) {
-    return res
-      .status(400)
-      .json({ message: "Full name and phone are required" });
-  }
-
-  try {
-    await pool.query(
-      "UPDATE users SET full_name = $1, phone = $2 WHERE id = $3",
-      [full_name, phone, req.user.id],
-    );
-
-    res.json({ message: "Profile updated successfully" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
 
 // GET /profile/addresses - Get all addresses for the user
 router.get("/addresses", authenticateToken, async (req, res) => {
