@@ -8,6 +8,20 @@ const {
 
 const router = express.Router();
 
+// Get available payment methods (public endpoint)
+router.get("/payment-methods", async(req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, payment_method, notes FROM available_payment_method WHERE is_available = true ORDER BY id`
+    );
+	console.log(result);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("Error fetching payment methods:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 const DELIVERY_FREE_THRESHOLD = Number(process.env.DELIVERY_FREE_THRESHOLD || 500);
 const DEFAULT_DELIVERY_CHARGE = Number(process.env.DELIVERY_CHARGE || 50);
 
@@ -85,7 +99,7 @@ router.post("/initiate", authenticateToken, async (req, res) => {
 			.json({ message: "Address and items are required" });
 	}
 
-	if (payment_gateway !== "phonepe") {
+	if (!["phonepe", "cash_on_delivery"].includes(payment_gateway)) {
 		return res
 			.status(400)
 			.json({ message: "Unsupported payment gateway" });
@@ -153,9 +167,14 @@ router.post("/initiate", authenticateToken, async (req, res) => {
 		const computedShipping = calculateShipping(itemSubtotal);
 		const totalAmount = itemSubtotal + computedShipping;
 
+		// Determine payment method and status based on gateway
+		const isCOD = payment_gateway === "cash_on_delivery";
+		const dbPaymentMethod = isCOD ? "cod" : "upi";
+		const initialPaymentStatus = isCOD ? "pending" : "pending";
+
 		const orderResult = await client.query(
-			"INSERT INTO orders (user_id, total_amount, payment_method, payment_status, address_id) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-			[req.user.id, totalAmount, "upi", "pending", address_id],
+			"INSERT INTO orders (user_id, total_amount, payment_method, payment_status, status, address_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+			[req.user.id, totalAmount, dbPaymentMethod, initialPaymentStatus, isCOD ? "confirmed" : "pending", address_id],
 		);
 
 		const orderId = orderResult.rows[0].id;
@@ -176,10 +195,32 @@ router.post("/initiate", authenticateToken, async (req, res) => {
 				"UPDATE products SET stock = stock - $1 WHERE id = $2",
 				[item.quantity, item.productId],
 			);
+
+			await client.query(
+				"DELETE FROM cart WHERE user_id = $1 AND product_id = $2",
+				[req.user.id, item.productId],
+			);
 		}
 
 		await client.query("COMMIT");
 
+		// Handle COD orders - no payment gateway needed
+		if (isCOD) {
+			const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+			
+			res.status(201).json({
+				message: "Order placed successfully",
+				order_id: orderId,
+				subtotal: itemSubtotal,
+				shipping_charge: computedShipping,
+				total: totalAmount,
+				payment_gateway: "cash_on_delivery",
+				redirect_url: `${frontendUrl}/account/orders`,
+			});
+			return;
+		}
+
+		// Handle PhonePe orders
 		const merchantTransactionId = orderIdToMerchantTxnId(orderId);
 		const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
 		const backendPublicUrl =

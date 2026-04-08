@@ -433,4 +433,46 @@ router.put("/orders/:id", authenticateAdmin, async (req, res) => {
   }
 });
 
+// Get all payment methods
+router.get("/payment-methods", authenticateAdmin, async(req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM available_payment_method ORDER BY id`
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("Error fetching payment methods:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// toggles payment method availability(mainly for cod)
+router.post("/payment/toggle", authenticateAdmin, async(req, res) => {
+  const { payment_method, is_available } = req.body;
+  
+  // Validate required fields
+  if (!payment_method || typeof is_available !== 'boolean') {
+    return res.status(400).json({ message: "payment_method and is_available (boolean) are required" });
+  }
+  
+  try{
+    const result = await pool.query(
+      `UPDATE available_payment_method SET is_available = $1, updated_at = CURRENT_TIMESTAMP WHERE payment_method = $2 RETURNING *`,
+      [is_available, payment_method]
+    );
+    
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: "Payment method not found" });
+    }
+
+    res.status(200).json({ 
+      message: "Payment method updated successfully",
+      payment_method: result.rows[0]
+    });
+  }catch(error){
+    console.error("Error updating payment method:", error);
+    return res.status(500).json({ message: "Server error" });
+  }
+})
+
 module.exports = router;

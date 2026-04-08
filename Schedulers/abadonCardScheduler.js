@@ -4,8 +4,14 @@ const { CronJob } = require("cron");
 const pool = require("../db");
 const sendMail = require("../helpers/sendMail");
 
+const IS_DEVELOPMENT = process.env.NODE_ENV !== "production";
 const BATCH_SIZE = Number.parseInt(process.env.CART_ABANDON_BATCH_SIZE || "50", 10) || 50;
-const CRON_EXPRESSION = process.env.CART_ABANDON_CRON || "0 * * * *";
+const INACTIVITY_WINDOW_HOURS = IS_DEVELOPMENT
+    ? 1
+    : Number.parseInt(process.env.CART_ABANDON_INACTIVITY_HOURS || "24", 10) || 24;
+const CRON_EXPRESSION = IS_DEVELOPMENT
+    ? "* * * * *"
+    : process.env.CART_ABANDON_CRON || "0 * * * *";
 const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
 const CHECKOUT_URL = `${FRONTEND_URL}/cart`;
 
@@ -77,6 +83,10 @@ function buildEmailHtml(userName, items, subtotal) {
 }
 
 async function fetchEligibleUsers(limit) {
+    console.log(
+        `[AbandonedCartScheduler][DEBUG] Fetching eligible users. limit=${limit}, inactivityWindowHours=${INACTIVITY_WINDOW_HOURS}`,
+    );
+
     const result = await pool.query(
         `
         WITH eligible_users AS (
@@ -90,15 +100,15 @@ async function fetchEligibleUsers(limit) {
             FROM users u
             JOIN cart ct ON ct.user_id = u.id
             LEFT JOIN cart_abandon_reminders r ON r.user_id = u.id
-            WHERE ct.updated_at <= NOW() - INTERVAL '24 hours'
+            WHERE ct.updated_at <= NOW() - ($2::text || ' hours')::interval
                 AND NOT EXISTS (
                     SELECT 1
                     FROM orders o
                     WHERE o.user_id = u.id
-                        AND o.created_at >= NOW() - INTERVAL '24 hours'
+                        AND o.created_at >= NOW() - ($2::text || ' hours')::interval
                 )
             GROUP BY u.id, u.full_name, u.email, r.last_cart_activity_at
-            HAVING MAX(ct.updated_at) <= NOW() - INTERVAL '24 hours'
+            HAVING MAX(ct.updated_at) <= NOW() - ($2::text || ' hours')::interval
                 AND COALESCE(r.last_cart_activity_at, TIMESTAMPTZ 'epoch') < MAX(ct.updated_at)
             ORDER BY MAX(ct.updated_at) ASC, u.id ASC
             LIMIT $1
@@ -135,16 +145,21 @@ async function fetchEligibleUsers(limit) {
         GROUP BY eu.user_id, eu.full_name, eu.email, eu.last_cart_activity_at, eu.cart_item_count, eu.total_quantity
         ORDER BY eu.last_cart_activity_at ASC, eu.user_id ASC
         `,
-        [limit],
+        [limit, INACTIVITY_WINDOW_HOURS],
     );
+
+    console.log(`[AbandonedCartScheduler][DEBUG] Eligible users found: ${result.rows.length}`);
 
     return result.rows;
 }
 
 async function markRemindersSent(users) {
     if (users.length === 0) {
+        console.log("[AbandonedCartScheduler][DEBUG] No delivered users to mark in cart_abandon_reminders.");
         return;
     }
+
+    console.log(`[AbandonedCartScheduler][DEBUG] Marking reminders sent for ${users.length} users.`);
 
     const values = [];
     const placeholders = users.map((user, index) => {
@@ -156,7 +171,7 @@ async function markRemindersSent(users) {
     await pool.query(
         `
         INSERT INTO cart_abandon_reminders (user_id, last_cart_activity_at, last_sent_at)
-        VALUES ${placeholders.join(", ")}
+        VALUES ${placeholders.map((entry) => `${entry.slice(0, -1)}, NOW())`).join(", ")}
         ON CONFLICT (user_id)
         DO UPDATE SET
             last_cart_activity_at = EXCLUDED.last_cart_activity_at,
@@ -171,6 +186,10 @@ async function sendReminderEmail(user) {
     const items = Array.isArray(user.items) ? user.items : [];
     const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
 
+    console.log(
+        `[AbandonedCartScheduler][DEBUG] Preparing email for user=${user.user_id}, email=${user.email}, items=${items.length}, subtotal=${subtotal}`,
+    );
+
     await sendMail({
         to: user.email,
         subject: "Your cart is waiting",
@@ -182,11 +201,20 @@ async function sendReminderEmail(user) {
 async function runAbandonedCartBatch() {
     let sentCount = 0;
     let failedCount = 0;
+    let cycle = 0;
+
+    console.log(
+        `[AbandonedCartScheduler][DEBUG] Batch run started. batchSize=${BATCH_SIZE}, inactivityWindowHours=${INACTIVITY_WINDOW_HOURS}, cron='${CRON_EXPRESSION}', env=${process.env.NODE_ENV || "undefined"}`,
+    );
 
     while (true) {
+        cycle += 1;
+        console.log(`[AbandonedCartScheduler][DEBUG] Processing cycle ${cycle}.`);
+
         const batch = await fetchEligibleUsers(BATCH_SIZE);
 
         if (batch.length === 0) {
+            console.log("[AbandonedCartScheduler][DEBUG] No users in current batch. Stopping run.");
             break;
         }
 
@@ -208,7 +236,12 @@ async function runAbandonedCartBatch() {
             await markRemindersSent(delivered);
         }
 
+        console.log(
+            `[AbandonedCartScheduler][DEBUG] Cycle ${cycle} complete. batch=${batch.length}, delivered=${delivered.length}, failedInRun=${failedCount}`,
+        );
+
         if (batch.length < BATCH_SIZE) {
+            console.log("[AbandonedCartScheduler][DEBUG] Last batch smaller than batch size. Stopping run.");
             break;
         }
     }
@@ -231,6 +264,8 @@ const AbandonedCartScheduler = new CronJob(
 );
 
 AbandonedCartScheduler.start();
-console.log(`Abandoned cart scheduler started with cron: ${CRON_EXPRESSION}`);
+console.log(
+    `Abandoned cart scheduler started with cron: ${CRON_EXPRESSION}, inactivityWindowHours=${INACTIVITY_WINDOW_HOURS}, mode=${IS_DEVELOPMENT ? "development" : "production"}`,
+);
 
 module.exports = AbandonedCartScheduler;

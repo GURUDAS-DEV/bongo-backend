@@ -328,3 +328,19 @@ CREATE TRIGGER update_cart_abandon_reminders_updated_at
 BEFORE UPDATE ON cart_abandon_reminders
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
+
+
+CREATE TABLE IF NOT EXISTS available_payment_method(
+  id SERIAL PRIMARY KEY,
+  payment_method VARCHAR(50) NOT NULL UNIQUE,
+  is_available BOOLEAN DEFAULT true,
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert default payment methods
+INSERT INTO available_payment_method (payment_method, is_available, notes) VALUES
+  ('cash_on_delivery', true, 'Pay when you receive your order'),
+  ('phonepe', true, 'Continue With Phone Pay for UPI, Net Banking & Credit/Debit Card')
+ON CONFLICT (payment_method) DO NOTHING;
