@@ -344,3 +344,17 @@ INSERT INTO available_payment_method (payment_method, is_available, notes) VALUE
   ('cash_on_delivery', true, 'Pay when you receive your order'),
   ('phonepe', true, 'Continue With Phone Pay for UPI, Net Banking & Credit/Debit Card')
 ON CONFLICT (payment_method) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS shiprocket_key(
+  id INT PRIMARY KEY DEFAULT 1,
+  shiprocket_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT single_row_only CHECK (id = 1)
+);
+
+DROP TRIGGER IF EXISTS update_shiprocket_key_updated_at ON shiprocket_key;
+CREATE TRIGGER update_shiprocket_key_updated_at
+BEFORE UPDATE ON shiprocket_key
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();

@@ -4,14 +4,9 @@ const { CronJob } = require("cron");
 const pool = require("../db");
 const sendMail = require("../helpers/sendMail");
 
-const IS_DEVELOPMENT = process.env.NODE_ENV !== "production";
-const BATCH_SIZE = Number.parseInt(process.env.CART_ABANDON_BATCH_SIZE || "50", 10) || 50;
-const INACTIVITY_WINDOW_HOURS = IS_DEVELOPMENT
-    ? 1
-    : Number.parseInt(process.env.CART_ABANDON_INACTIVITY_HOURS || "24", 10) || 24;
-const CRON_EXPRESSION = IS_DEVELOPMENT
-    ? "* * * * *"
-    : process.env.CART_ABANDON_CRON || "0 * * * *";
+const BATCH_SIZE = Number.parseInt(process.env.CART_ABANDON_BATCH_SIZE || "10", 10) || 10;
+const INACTIVITY_WINDOW_HOURS = Number.parseInt(process.env.CART_ABANDON_INACTIVITY_HOURS || "24", 10) || 24;
+const CRON_EXPRESSION = process.env.CART_ABANDON_CRON || "0 0 * * *";
 const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
 const CHECKOUT_URL = `${FRONTEND_URL}/cart`;
 
@@ -83,10 +78,6 @@ function buildEmailHtml(userName, items, subtotal) {
 }
 
 async function fetchEligibleUsers(limit) {
-    console.log(
-        `[AbandonedCartScheduler][DEBUG] Fetching eligible users. limit=${limit}, inactivityWindowHours=${INACTIVITY_WINDOW_HOURS}`,
-    );
-
     const result = await pool.query(
         `
         WITH eligible_users AS (
@@ -148,18 +139,13 @@ async function fetchEligibleUsers(limit) {
         [limit, INACTIVITY_WINDOW_HOURS],
     );
 
-    console.log(`[AbandonedCartScheduler][DEBUG] Eligible users found: ${result.rows.length}`);
-
     return result.rows;
 }
 
 async function markRemindersSent(users) {
     if (users.length === 0) {
-        console.log("[AbandonedCartScheduler][DEBUG] No delivered users to mark in cart_abandon_reminders.");
         return;
     }
-
-    console.log(`[AbandonedCartScheduler][DEBUG] Marking reminders sent for ${users.length} users.`);
 
     const values = [];
     const placeholders = users.map((user, index) => {
@@ -186,10 +172,6 @@ async function sendReminderEmail(user) {
     const items = Array.isArray(user.items) ? user.items : [];
     const subtotal = items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
 
-    console.log(
-        `[AbandonedCartScheduler][DEBUG] Preparing email for user=${user.user_id}, email=${user.email}, items=${items.length}, subtotal=${subtotal}`,
-    );
-
     await sendMail({
         to: user.email,
         subject: "Your cart is waiting",
@@ -203,18 +185,12 @@ async function runAbandonedCartBatch() {
     let failedCount = 0;
     let cycle = 0;
 
-    console.log(
-        `[AbandonedCartScheduler][DEBUG] Batch run started. batchSize=${BATCH_SIZE}, inactivityWindowHours=${INACTIVITY_WINDOW_HOURS}, cron='${CRON_EXPRESSION}', env=${process.env.NODE_ENV || "undefined"}`,
-    );
-
     while (true) {
         cycle += 1;
-        console.log(`[AbandonedCartScheduler][DEBUG] Processing cycle ${cycle}.`);
 
         const batch = await fetchEligibleUsers(BATCH_SIZE);
 
         if (batch.length === 0) {
-            console.log("[AbandonedCartScheduler][DEBUG] No users in current batch. Stopping run.");
             break;
         }
 
@@ -225,10 +201,8 @@ async function runAbandonedCartBatch() {
                 await sendReminderEmail(user);
                 delivered.push(user);
                 sentCount += 1;
-                console.log(`Abandoned cart reminder sent to ${user.email}`);
             } catch (error) {
                 failedCount += 1;
-                console.error(`Failed to send abandoned cart reminder to ${user.email}:`, error);
             }
         }
 
@@ -236,17 +210,10 @@ async function runAbandonedCartBatch() {
             await markRemindersSent(delivered);
         }
 
-        console.log(
-            `[AbandonedCartScheduler][DEBUG] Cycle ${cycle} complete. batch=${batch.length}, delivered=${delivered.length}, failedInRun=${failedCount}`,
-        );
-
         if (batch.length < BATCH_SIZE) {
-            console.log("[AbandonedCartScheduler][DEBUG] Last batch smaller than batch size. Stopping run.");
             break;
         }
     }
-
-    console.log(`Abandoned cart reminder run complete. sent=${sentCount}, failed=${failedCount}`);
 }
 
 const AbandonedCartScheduler = new CronJob(
@@ -255,7 +222,7 @@ const AbandonedCartScheduler = new CronJob(
         try {
             await runAbandonedCartBatch();
         } catch (error) {
-            console.error("Abandoned cart scheduler failed:", error);
+            // Error silently caught
         }
     },
     null,
@@ -264,8 +231,5 @@ const AbandonedCartScheduler = new CronJob(
 );
 
 AbandonedCartScheduler.start();
-console.log(
-    `Abandoned cart scheduler started with cron: ${CRON_EXPRESSION}, inactivityWindowHours=${INACTIVITY_WINDOW_HOURS}, mode=${IS_DEVELOPMENT ? "development" : "production"}`,
-);
 
 module.exports = AbandonedCartScheduler;

@@ -460,16 +460,41 @@ router.delete(
     const { id } = req.params;
 
     try {
-      const result = await pool.query(
-        "DELETE FROM products WHERE id = $1 RETURNING id",
+      const productExists = await pool.query(
+        "SELECT id FROM products WHERE id = $1",
         [id],
       );
 
-      if (result.rows.length === 0) {
+      if (productExists.rows.length === 0) {
         return res.status(404).json({ message: "Product not found" });
       }
 
-      res.json({ message: "Product deleted successfully" });
+      const orderReference = await pool.query(
+        "SELECT 1 FROM order_items WHERE product_id = $1 LIMIT 1",
+        [id],
+      );
+
+      if (orderReference.rows.length > 0) {
+        await pool.query(
+          `UPDATE products
+           SET is_visible = FALSE,
+               stock = 0,
+               stock_status = 'out_of_stock',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [id],
+        );
+
+        return res.json({
+          message:
+            "Product has order history, so it was archived instead of deleted",
+          archived: true,
+        });
+      }
+
+      await pool.query("DELETE FROM products WHERE id = $1", [id]);
+
+      return res.json({ message: "Product deleted successfully", archived: false });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server error" });
